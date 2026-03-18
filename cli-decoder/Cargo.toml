@@ -1,0 +1,10 @@
+[package]
+name = "dac-decoder-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.6.0", features = ["derive"] }
+hound = "3.5.1"
+ndarray = "0.17.2"
+ort = { version = "2.0.0-rc.10", features = ["ndarray"] }
