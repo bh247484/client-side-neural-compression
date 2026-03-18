@@ -1,65 +1,86 @@
 // src/App.tsx
 import { useEffect, useRef, useState } from 'react';
 
+type SocketStatus = 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'ERROR'
+const SOCKET_PORT = 'ws://localhost:8080';
+
 export default function App() {
   const [isReady, setIsReady] = useState(false);
-  const [metrics, setMetrics] = useState({ time: '0', rtf: '0' });
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [socketStatus, setSocketStatus] = useState<SocketStatus>('CONNECTING');
   const workerRef = useRef<Worker | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-
-  // We will buffer 1 second of audio (16,000 samples) before sending to the worker
-  const bufferRef = useRef<Float32Array>(new Float32Array(16000));
-  const bufferIndexRef = useRef(0);
+  const socketRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    // Spin up the worker
+    // 1. Initialize the WebSocket connection (placeholder port 8080)
+    const socket = new WebSocket(SOCKET_PORT);
+    socketRef.current = socket;
+    
+    socket.onopen = () => {
+      console.log("WebSocket: Connected to backend");
+      setSocketStatus('CONNECTED');
+    };
+    socket.onerror = (err) => {
+      console.error("WebSocket: Error", err);
+      setSocketStatus('ERROR');
+    };
+    socket.onclose = () => {
+      console.log("WebSocket: Disconnected");
+      setSocketStatus('DISCONNECTED');
+    };
+
+    // 2. Spin up the encoder worker
     workerRef.current = new Worker(new URL('./encoder.worker.ts', import.meta.url), { type: 'module' });
     
     workerRef.current.onmessage = (e) => {
-      if (e.data.type === 'READY') setIsReady(true);
-      if (e.data.type === 'METRICS') {
-        setMetrics({ time: e.data.inferenceTime, rtf: e.data.rtf });
+      if (e.data.type === 'READY') {
+        setIsReady(true);
+      }
+      
+      if (e.data.type === 'ENCODED_TOKENS') {
+        // Stream the tokens directly to the backend
+        if (socketRef.current?.readyState === WebSocket.OPEN) {
+          socketRef.current.send(e.data.payload.buffer); // Send the raw buffer for efficiency
+        }
       }
     };
 
-    // Initialize the quantized model by default
+    // Initialize with the quantized model
     workerRef.current.postMessage({ type: 'INIT', payload: 'dac_encoder_16k_int8.onnx' });
 
-    return () => workerRef.current?.terminate();
+    return () => {
+      workerRef.current?.terminate();
+      socket.close();
+    };
   }, []);
 
-const startRecording = async () => {
+  const startStreaming = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       
-      // Force the hardware to downsample to 16kHz
+      // Force hardware to 16kHz
       audioContextRef.current = new AudioContext({ sampleRate: 16000 });
       const source = audioContextRef.current.createMediaStreamSource(stream);
       
-      // 1. Fetch and load the Worklet script from the public folder
+      // Load Worklet
       await audioContextRef.current.audioWorklet.addModule('/audio-processor.js');
       
-      // 2. Instantiate the node using the exact string name we registered
       const workletNode = new AudioWorkletNode(
         audioContextRef.current, 
         'audio-capture-processor'
       );
       
-      // 3. Listen for the 16,000-sample arrays coming from the background audio thread
+      // Pipe raw audio chunks to the encoder worker
       workletNode.port.onmessage = (e) => {
-        const audioChunk = e.data;
-        // Pass it straight to the ONNX Web Worker
-        workerRef.current?.postMessage({ type: 'ENCODE', payload: audioChunk });
+        workerRef.current?.postMessage({ type: 'ENCODE', payload: e.data });
       };
 
-      // 4. Connect the microphone to the Worklet
       source.connect(workletNode);
-      
-      // CRITICAL: Do NOT connect the workletNode to the audioContext destination,
-      // otherwise the user's microphone will echo loudly back through their speakers.
+      setIsStreaming(true);
       
     } catch (err) {
-      console.error("Failed to start audio capture:", err);
+      console.error("Failed to start audio stream:", err);
     }
   };
 
@@ -67,22 +88,30 @@ const startRecording = async () => {
     <div style={{ padding: '2rem', fontFamily: 'monospace' }}>
       <h1>B2B Audio Edge Pipeline PoC</h1>
       {!isReady ? (
-        <p>Loading ONNX WebAssembly Backend...</p>
+        <p>Initializing Encoder & Socket...</p>
       ) : (
         <div>
-          <button onClick={startRecording} style={{ padding: '1rem', fontSize: '1.2rem' }}>
-            Start 16kHz Capture & Encode
+          <button 
+            onClick={startStreaming} 
+            disabled={isStreaming}
+            style={{ 
+              padding: '1rem', 
+              fontSize: '1.2rem', 
+              cursor: isStreaming ? 'not-allowed' : 'pointer',
+              background: isStreaming ? '#ccc' : '#0070f3',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px'
+            }}
+          >
+            {isStreaming ? 'STREAMING ACTIVE' : 'START EDGE STREAM'}
           </button>
           
-          <div style={{ marginTop: '2rem', padding: '1rem', background: '#f0f0f0' }}>
-            <h2>Latest Inference Metrics</h2>
-            <p><strong>Processing Time (per 1s chunk):</strong> {metrics.time} ms</p>
-            <p>
-              <strong>Real-Time Factor (RTF):</strong> <span style={{ color: Number(metrics.rtf) > 0.8 ? 'red' : 'green'}}>{metrics.rtf}</span>
-            </p>
-            <p style={{ fontSize: '0.8rem', color: '#666' }}>
-              * If RTF is &gt; 1.0, the encoder is lagging behind real-time.
-            </p>
+          <div style={{ marginTop: '2rem', padding: '1rem', border: '1px solid #ccc' }}>
+            <h2>Stream Status</h2>
+            <p><strong>Encoder:</strong> {isReady ? 'READY' : 'LOADING'}</p>
+            <p><strong>Socket:</strong> {socketStatus}</p>
+            <p><strong>Active:</strong> {isStreaming ? 'YES' : 'NO'}</p>
           </div>
         </div>
       )}
