@@ -1,7 +1,37 @@
+/*!
+# DAC Decoder CLI
+
+A command-line tool to decode raw binary tokens (encoded via Descript Audio Codec) 
+back into 16kHz mono WAV files using ONNX Runtime.
+
+## Build
+```bash
+cargo build --release
+```
+The binary will be located at `./target/release/dac-decoder-cli`.
+
+## Usage Examples
+
+### Basic decoding
+Decodes `session.dac` using the default model path and saves to `session.wav`.
+```bash
+./target/release/dac-decoder-cli session.dac
+```
+
+### Custom output path
+```bash
+./target/release/dac-decoder-cli session.dac --output reconstructed.wav
+```
+
+### Specifying a different model
+```bash
+./target/release/dac-decoder-cli session.dac --model ./models/my_decoder.onnx
+```
+*/
+
 use clap::Parser;
 use ndarray::Array3;
 use ort::session::{Session, builder::GraphOptimizationLevel};
-use ort::inputs;
 use std::fs::File;
 use std::io::Read;
 use std::path::PathBuf;
@@ -37,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // 2. Initialize ONNX Runtime Session
-    let session = Session::builder()?
+    let mut session = Session::builder()?
         .with_optimization_level(GraphOptimizationLevel::Level3)?
         .with_intra_threads(1)?
         .commit_from_file(args.model)?;
@@ -74,13 +104,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ).into());
     }
 
-    println!("Reshaping tokens to [1, {}, {}]", codes, sequence_length);
-    let tokens_array = Array3::from_shape_vec((1, codes, sequence_length), tokens_raw)?;
+    // Read the array exactly as it was streamed over the websocket (Time-Major)
+    println!("Reading time-major chunks from file: [1, {}, {}]", sequence_length, codes);
+    let time_major_array = Array3::from_shape_vec((1, sequence_length, codes), tokens_raw)?;
+    
+    // Transpose axes 1 and 2 (swap time and codes) to get Code-Major, 
+    // and copy to a new contiguous memory block for ONNX.
+    // The axes are [batch(0), time(1), codes(2)] -> we want [batch(0), codes(2), time(1)]
+    println!("Swizzling axes to ONNX code-major shape: [1, {}, {}]", codes, sequence_length);
+    let tokens_array = time_major_array.permuted_axes([0, 2, 1]).to_owned();
 
     // 4. Run Inference
     println!("Running inference...");
-    let outputs = session.run(inputs![tokens_array]?)?;
-    let reconstructed_audio = outputs[0].try_extract_tensor::<f32>()?;
+    let tokens_value = ort::value::Value::from_array(tokens_array)?;
+    let outputs = session.run(ort::inputs![tokens_value])?;
+    let (_, reconstructed_audio_data) = outputs[0].try_extract_tensor::<f32>()?;
 
     // 5. Save as WAV
     println!("Saving reconstructed audio to: {:?}", output_path);
@@ -91,7 +129,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sample_format: hound::SampleFormat::Int,
     };
     let mut writer = hound::WavWriter::create(output_path, spec)?;
-    for &sample in reconstructed_audio.iter() {
+    for &sample in reconstructed_audio_data.iter() {
         let amplitude = i16::MAX as f32;
         writer.write_sample((sample.clamp(-1.0, 1.0) * amplitude) as i16)?;
     }
