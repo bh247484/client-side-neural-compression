@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 type SocketStatus = 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'ERROR'
-const SOCKET_PORT = 'ws://localhost:8080';
+const SOCKET_URL = 'ws://localhost:8080';
 
 export default function App() {
   const [isReady, setIsReady] = useState(false);
@@ -12,25 +12,8 @@ export default function App() {
   const audioContextRef = useRef<AudioContext | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
 
+  // Setup encoder worker and load onnx dac model.
   useEffect(() => {
-    // 1. Initialize the WebSocket connection (placeholder port 8080)
-    const socket = new WebSocket(SOCKET_PORT);
-    socketRef.current = socket;
-    
-    socket.onopen = () => {
-      console.log("WebSocket: Connected to backend");
-      setSocketStatus('CONNECTED');
-    };
-    socket.onerror = (err) => {
-      console.error("WebSocket: Error", err);
-      setSocketStatus('ERROR');
-    };
-    socket.onclose = () => {
-      console.log("WebSocket: Disconnected");
-      setSocketStatus('DISCONNECTED');
-    };
-
-    // 2. Spin up the encoder worker
     workerRef.current = new Worker(new URL('./encoder.worker.ts', import.meta.url), { type: 'module' });
     
     workerRef.current.onmessage = (e) => {
@@ -39,41 +22,48 @@ export default function App() {
       }
       
       if (e.data.type === 'ENCODED_TOKENS') {
-        // Stream the tokens directly to the backend
+        const tokens = e.data.payload;
+        // Because socketRef is mutable, the worker will always see the currently active socket
         if (socketRef.current?.readyState === WebSocket.OPEN) {
-          socketRef.current.send(e.data.payload.buffer); // Send the raw buffer for efficiency
+          socketRef.current.send(tokens.buffer);
         }
       }
     };
 
-    // Initialize with the quantized model
     workerRef.current.postMessage({ type: 'INIT', payload: 'dac_encoder_16k_int8.onnx' });
 
+    // We no longer brutally terminate the worker on unmount during dev
+    // to prevent Vite from choking on severed Wasm streams.
     return () => {
-      workerRef.current?.terminate();
-      socket.close();
+      if (socketRef.current) socketRef.current.close();
     };
   }, []);
 
+  // Streaming (Socket + Audio) spun up fresh on demand
   const startStreaming = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // 1. Spin up a fresh WebSocket connection
+      const socket = new WebSocket(SOCKET_URL);
+      socketRef.current = socket;
+      setSocketStatus('CONNECTING');
       
-      // Force hardware to 16kHz
+      socket.onopen = () => setSocketStatus('CONNECTED');
+      socket.onerror = () => setSocketStatus('ERROR');
+      socket.onclose = () => setSocketStatus('DISCONNECTED');
+
+      // 2. Spin up the Audio Pipeline
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       audioContextRef.current = new AudioContext({ sampleRate: 16000 });
       const source = audioContextRef.current.createMediaStreamSource(stream);
       
-      // Load Worklet
       await audioContextRef.current.audioWorklet.addModule('/audio-processor.js');
+      const workletNode = new AudioWorkletNode(audioContextRef.current, 'audio-capture-processor');
       
-      const workletNode = new AudioWorkletNode(
-        audioContextRef.current, 
-        'audio-capture-processor'
-      );
-      
-      // Pipe raw audio chunks to the encoder worker
       workletNode.port.onmessage = (e) => {
-        workerRef.current?.postMessage({ type: 'ENCODE', payload: e.data });
+        workerRef.current?.postMessage({ 
+          type: 'ENCODE', 
+          payload: e.data
+        });
       };
 
       source.connect(workletNode);
@@ -81,7 +71,22 @@ export default function App() {
       
     } catch (err) {
       console.error("Failed to start audio stream:", err);
+      setSocketStatus('ERROR');
     }
+  };
+
+  const stopStreaming = () => {
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    
+    if (socketRef.current) {
+      socketRef.current.close(); 
+      socketRef.current = null;
+    }
+    
+    setIsStreaming(false);
   };
 
   return (
@@ -104,7 +109,24 @@ export default function App() {
               borderRadius: '4px'
             }}
           >
-            {isStreaming ? 'STREAMING ACTIVE' : 'START EDGE STREAM'}
+            {isStreaming ? 'STREAMING ACTIVE' : 'START STREAM'}
+          </button>
+
+          <button 
+            onClick={stopStreaming} 
+            disabled={!isStreaming}
+            style={{ 
+              padding: '1rem', 
+              marginLeft: '1rem',
+              fontSize: '1.2rem', 
+              cursor: !isStreaming ? 'not-allowed' : 'pointer',
+              background: !isStreaming ? '#ccc' : '#ff4444',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px'
+            }}
+          >
+            STOP STREAM
           </button>
           
           <div style={{ marginTop: '2rem', padding: '1rem', border: '1px solid #ccc' }}>
