@@ -13,15 +13,24 @@ const PORT = 8080;
 wss.on('connection', (ws: WebSocket) => {
   console.log('Client connected');
   
-  // Create a buffer array to store incoming token chunks
-  const chunks: Buffer[] = [];
   const sessionId = Date.now();
   const outputFilePath = path.join(__dirname, '..', `session-${sessionId}.dac`);
+  
+  // Maintain Direct-to-Disk Streaming
+  const fileStream = fs.createWriteStream(outputFilePath);
+  let totalBytesWritten = 0;
+  let chunkCount = 0;
 
   ws.on('message', (data: Buffer, isBinary: boolean) => {
     if (isBinary) {
-      chunks.push(data);
-      console.log(`Received binary chunk of size: ${data.length} bytes`);
+      // Roll back sequence header extraction, write raw data
+      fileStream.write(data);
+      totalBytesWritten += data.length;
+      chunkCount++;
+      
+      if (chunkCount % 10 === 0) {
+        console.log(`Received chunk ${chunkCount}, total size: ${totalBytesWritten} bytes`);
+      }
     } else {
       console.log('Received text message:', data.toString());
     }
@@ -29,25 +38,20 @@ wss.on('connection', (ws: WebSocket) => {
 
   ws.on('close', () => {
     console.log('Client disconnected');
+    fileStream.end();
     
-    if (chunks.length > 0) {
-      // Concatenate all chunks and write to disk
-      const fullBuffer = Buffer.concat(chunks);
-      fs.writeFile(outputFilePath, fullBuffer, (err) => {
-        if (err) {
-          console.error('Failed to save .dac file:', err);
-        } else {
-          console.log(`Successfully saved tokens to: ${outputFilePath}`);
-          console.log(`Total file size: ${fullBuffer.length} bytes`);
-        }
-      });
+    if (totalBytesWritten > 0) {
+      console.log(`Successfully saved tokens to: ${outputFilePath}`);
+      console.log(`Total file size: ${totalBytesWritten} bytes`);
     } else {
-      console.log('No tokens received, skipping file save.');
+      console.log('No tokens received, removing empty file.');
+      fs.unlink(outputFilePath, () => {});
     }
   });
 
   ws.on('error', (err) => {
     console.error('WebSocket Error:', err);
+    fileStream.end();
   });
 });
 
