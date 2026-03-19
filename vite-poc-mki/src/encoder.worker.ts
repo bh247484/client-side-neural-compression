@@ -15,6 +15,9 @@ self.onmessage = async (e: MessageEvent) => {
     try {
       session = await ort.InferenceSession.create(`/${payload}`, { 
         executionProviders: ['wasm'],
+        // Significant performance boost using webgpu on my Macbook
+        // but sticking with 'wasm' on the cpu for max compatibility.
+        // executionProviders: ['webgpu'],
         enableCpuMemArena: true, 
         graphOptimizationLevel: 'all', 
       });
