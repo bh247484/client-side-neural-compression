@@ -1,6 +1,6 @@
 ## Dependency Issue Fixes
 - Must install in this order to avoid protobuf depednecy conflict between onnx and descript-audio-codec
-- Also should include `--prefer-binary` flag to avoid cmake incompatibilities
+- Also should include `--prefer-binary` flag to avoid cmake incompatibilities wherever possible
 
 ```sh
 pip install onnx onnxruntime onnxscript --prefer-binary
@@ -9,9 +9,7 @@ pip install descript-audio-codec
 pip install "protobuf>=4.25.1" --force-reinstall
 ```
 
-- Because onnx was installed in a previous step, pip will leave it installed. It will downgrade Protobuf, yell at you with red text, and finish. ONNX will survive on the older Protobuf, DAC will have the exact version it needs, and CMake won't execute a single time.
-
-- UPDATE: actually needed to upgrade to `protobuf>=4.25.1` with that last pip install command...
+- onnx and descript-audio-codec require conflicting versions of protobuf. That last pip install step will be (allegedly) incompatible for descript-audio-codec. After running that install step you'll see console warnings/errors but actually everything will be fine. I went around in circles trying to reconcile the dependency collisions and this was the only way I could get things to play nicely.
 
 ```sh
 pip install torchcodec
