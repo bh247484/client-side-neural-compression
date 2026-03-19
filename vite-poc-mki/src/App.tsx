@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 type SocketStatus = 'CONNECTING' | 'CONNECTED' | 'DISCONNECTED' | 'ERROR'
-const SOCKET_URL = 'ws://localhost:8080';
+const SOCKET_PORT = '8080';
 
 export default function App() {
   const [isReady, setIsReady] = useState(false);
@@ -43,7 +43,7 @@ export default function App() {
   const startStreaming = async () => {
     try {
       // 1. Spin up a fresh WebSocket connection
-      const socket = new WebSocket(SOCKET_URL);
+      const socket = new WebSocket(`ws://localhost:${SOCKET_PORT}`);
       socketRef.current = socket;
       setSocketStatus('CONNECTING');
       
