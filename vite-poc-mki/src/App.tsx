@@ -91,7 +91,7 @@ export default function App() {
 
   return (
     <div style={{ padding: '2rem', fontFamily: 'monospace' }}>
-      <h1>B2B Audio Edge Pipeline PoC</h1>
+      <h1>Client Side Neural Compression PoC</h1>
       {!isReady ? (
         <p>Initializing Encoder & Socket...</p>
       ) : (

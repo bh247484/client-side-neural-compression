@@ -1,6 +1,6 @@
 # Neural Audio Compression Pipeline (DAC + ONNX)
 
-This repo is a quick POC for client side neural audio compression. It splits the **Descript Audio Codec (DAC)** pytorch model into a quantized onnx encoder and an unquantized onnx decoder. The onnx models are used to compress 16kHz mono audio into discrete tokens on the client side (browser) and reconstruct it on the server side (Rust CLI).
+This repo is a quick PoC for client side neural audio compression. It splits the **Descript Audio Codec (DAC)** pytorch model into a quantized onnx encoder and an unquantized onnx decoder. The onnx models are used to compress 16kHz mono audio into discrete tokens on the client side (browser) and reconstruct it on the server side (Rust CLI).
 
 The rest of this documentation is gemini-cli generated with some human lights edits by me. Most of the pipeline is fairly straightforward and conventional. There's some interesting bits on tensor swizzling and time/code major encoded vector shapes necessitated by client side stream chunking. Read on if you're interested.
 
